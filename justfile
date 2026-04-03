@@ -1,11 +1,8 @@
 build:
-    go build -o bin/axon-cost ./cmd/axon-cost
-
-install: build
-    cp bin/axon-cost ~/.local/bin/axon-cost
+    go build ./...
 
 test:
-    go test ./...
+    go test -race ./...
 
-vet:
+lint:
     go vet ./...
