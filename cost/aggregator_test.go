@@ -79,6 +79,77 @@ func TestAggregator_Summary_Totals(t *testing.T) {
 	}
 }
 
+func TestAggregator_BudgetCallback_Fires(t *testing.T) {
+	fired := make(chan struct{}, 1)
+	cb := func(current, threshold float64) {
+		fired <- struct{}{}
+	}
+
+	a := NewAggregator(WithBudget(0.05, cb))
+	a.Record(CostRecord{
+		Model: "gpt-4", Provider: "openai", Label: "test",
+		InputTokens: 100, OutputTokens: 100, TotalCost: 0.06,
+	})
+
+	select {
+	case <-fired:
+		// expected
+	case <-time.After(time.Second):
+		t.Error("budget callback did not fire within 1s")
+	}
+}
+
+func TestAggregator_BudgetCallback_DoesNotFireWhenUnder(t *testing.T) {
+	fired := make(chan struct{}, 1)
+	cb := func(current, threshold float64) {
+		fired <- struct{}{}
+	}
+
+	a := NewAggregator(WithBudget(0.10, cb))
+	a.Record(CostRecord{
+		Model: "gpt-4", Provider: "openai", Label: "test",
+		InputTokens: 100, OutputTokens: 100, TotalCost: 0.05,
+	})
+
+	select {
+	case <-fired:
+		t.Error("budget callback fired but should not have")
+	case <-time.After(50 * time.Millisecond):
+		// expected: no fire
+	}
+}
+
+func TestAggregator_BudgetCallback_FiresOnce(t *testing.T) {
+	var count int
+	var mu sync.Mutex
+	cb := func(current, threshold float64) {
+		mu.Lock()
+		count++
+		mu.Unlock()
+	}
+
+	a := NewAggregator(WithBudget(0.05, cb))
+	// Two records each exceeding the threshold
+	a.Record(CostRecord{
+		Model: "gpt-4", Provider: "openai", Label: "test",
+		InputTokens: 100, OutputTokens: 100, TotalCost: 0.06,
+	})
+	a.Record(CostRecord{
+		Model: "gpt-4", Provider: "openai", Label: "test",
+		InputTokens: 100, OutputTokens: 100, TotalCost: 0.06,
+	})
+
+	// Give goroutines time to run
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	got := count
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("budget callback fired %d times, want 1", got)
+	}
+}
+
 func TestCostSummary_MarkdownTable(t *testing.T) {
 	s := CostSummary{
 		TotalInputTokens:  180,
