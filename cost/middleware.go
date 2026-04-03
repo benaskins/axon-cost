@@ -2,6 +2,7 @@ package cost
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -103,8 +104,10 @@ func (m *Middleware) Chat(ctx context.Context, req *talk.Request, fn func(talk.R
 			return nil
 		}
 		ev := fact.Event{
-			Type: "inference.cost",
-			Data: data,
+			ID:         newUUID(),
+			Type:       "inference.cost",
+			Data:       data,
+			OccurredAt: record.Timestamp,
 		}
 		if appendErr := m.eventStore.Append(ctx, "inference.cost", []fact.Event{ev}); appendErr != nil {
 			fmt.Fprintf(os.Stderr, "axon-cost: append event: %v\n", appendErr)
@@ -112,6 +115,20 @@ func (m *Middleware) Chat(ctx context.Context, req *talk.Request, fn func(talk.R
 	}
 
 	return nil
+}
+
+// newUUID returns a random UUID v4 string using crypto/rand.
+func newUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failure is extraordinarily rare; fall back to empty string
+		// rather than panicking — callers treat empty ID as degraded, not fatal.
+		return ""
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant bits
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // requestText concatenates all message content from req for token estimation.
