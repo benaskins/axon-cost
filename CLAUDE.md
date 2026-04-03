@@ -1,152 +1,55 @@
-# Toolmaker: Axon Component Builder
-
-You are building an axon component. Axon is a suite of Go libraries for AI-powered services. Each component is a focused, composable module published as its own Go module under `github.com/benaskins/`.
-
-## Identity
-
-- Module path: always `github.com/benaskins/{name}`
-- Every axon module name is exactly four letters: loop, talk, tool, fact, auth, memo, look, task, gate, mind, lens, wire, synd, eval, tape, rule, chat, book, push, face, base, lore, sign, scan, cost
-- Do not change the module path. Do not invent org names.
-
-## Structure
-
-Axon libraries are NOT services. They have no `cmd/` directory, no `main()`, no HTTP server. They are imported by other code.
-
-Typical layout:
-```
-axon-{name}/
-  {package}/         # one or more focused packages
-  {package}_test.go  # tests alongside code
-  go.mod
-  go.sum
-  justfile
-  CLAUDE.md
-  AGENTS.md
-  README.md
-  plans/
-```
-
-Some modules are a single package at the root. Others have sub-packages for distinct concerns (e.g. axon-base has pool/, migration/, repository/, scan/).
-
-## Code Style
-
-- Explicit over implicit. No reflection for struct mapping. No `SELECT *`. No query builders.
-- Interfaces as contracts, not abstractions for their own sake. Only define an interface when there are (or will be) multiple implementations.
-- Error wrapping with context: `fmt.Errorf("operation: %w", err)`.
-- Context propagation: all blocking operations take `context.Context`.
-- No third-party assertion libraries (testify, gomega). Use standard `testing` package.
-- No testcontainers. Integration tests use the workbench Postgres at `localhost:5433` (database `workbench`, user `postgres`). Never port 5432, that is the core database. Skip gracefully if unavailable.
-
-## Dependencies
-
-- Only depend on standard library and the specific external libraries the PRD calls for (e.g. pgx, golang-migrate)
-- Depend on other axon modules only when the PRD requires composition (e.g. axon-cost depends on axon-fact for event emission)
-- Use replace directives in go.mod pointing to `~/dev/lamina/{name}` for local axon dependencies
-- Do not add axon (the HTTP toolkit) as a dependency unless this is a service. Libraries stay independent.
-
-## Testing
-
-- Write tests first (TDD). Every public function has tests.
-- Tests that need external services (Postgres, NATS) skip with `t.Skip()` when the service is unreachable. These are the real tests, not a separate tier.
-- Do not create a separate `integration/` test package. Per-package tests that hit real services are the integration tests.
-- For database libraries, do not mock the database. The SQL running against real Postgres is the test. Mock the `Repository` interface at the application boundary, not inside the library.
-- Use `t.TempDir()` for filesystem tests, never write outside of it.
-- No third-party assertion libraries. Standard `testing` package only.
-
-## Publishing
-
-After build, this module will be:
-1. Pushed to `github.com/benaskins/{name}`
-2. Tagged with a version
-3. Added to the axon catalogue in `luthier/catalogues/axon.yaml`
-4. Available for composition in future scaffolds
-
----
-
-# CLAUDE.md
+# axon-cost — Working Instructions
 
 ## What This Is
 
-Initialise the Go module as `github.com/(...)/axon-cost` (library, no main package). Create `go.mod` with dependencies on axon-talk and axon-fact. Add `justfile` with `build`, `test`, and `lint` targets. Add `README.md`, `AGENTS.md`, and `CLAUDE.md` stubs. Verify: `go build ./...` passes on an empty package placeholder.
+`axon-cost` is a Go library (`github.com/benaskins/axon-cost`) that wraps `talk.LLMClient` to compute and aggregate LLM inference costs. It is a library only — no `main` package, no HTTP server, no CLI entrypoint.
 
 ## Module
 
 - Module path: `github.com/benaskins/axon-cost`
 - Project type: library
+- Go version: 1.26
 
-## Build & Run
+## Build & Test
 
 ```bash
-just build     # builds to bin/axon-cost
-just install   # installs to ~/.local/bin/axon-cost
-just test      # run tests
-just vet       # lint
+just test    # go test -race ./...
+just vet     # go vet ./...
+just build   # go build ./...
 ```
+
+Always run `just test` (not `go test ./...`) — the justfile enables the race detector.
 
 ## Constraints
 
-These constraints are extracted from the PRD. Follow them strictly during implementation.
+Follow these strictly:
 
-- Go library only — no main package, no HTTP server, no CLI entrypoint.
-- Must not modify axon-talk's LLMClient interface — wrap it, don't extend it.
-- Only axon-talk and axon-fact may be imported from the axon ecosystem. No other axon dependencies.
-- Rate tables must be embeddable via go:embed or Go map literals so the library works without external config files at runtime.
-- The Middleware and Aggregator must be safe for concurrent use (sync.Mutex or equivalent).
-- Tests must not make real LLM calls — mock the underlying LLMClient.
-- Tests must not write outside t.TempDir().
-## Plan
+- **No real LLM calls in tests.** Mock `talk.LLMClient` using a struct with a `Chat` func field.
+- **No writes outside `t.TempDir()`.** File-based tests (e.g. YAML loading) must use `t.TempDir()`.
+- **No axon imports beyond axon-talk and axon-fact.** No axon-loop, axon-tool, axon-base, etc.
+- **Do not modify `talk.LLMClient`.** `cost.Middleware` wraps it; the interface is owned by axon-talk.
+- **Rate tables need no external config at runtime.** Use `DefaultRateTable()` (Go map literal) or `//go:embed`.
+- **`Middleware` and `Aggregator` must be safe for concurrent use.** Use `sync.Mutex` / `sync.RWMutex`.
+- **No third-party assertion libraries.** Standard `testing` package only.
 
-See `plans/` for commit-sized implementation steps.
+## Key Types
 
-## Framework: Axon/Lamina (go 1.26)
-
-### Components in Use
-
-- **axon-talk**: axon-cost wraps the talk.LLMClient interface to intercept Chat calls and capture token counts. axon-talk is the core dependency being wrapped.
-- **axon-fact**: Cost events are emitted as axon-fact compatible events (Event type, EventStore). CostRecord payloads are wrapped in fact.Event with type "inference.cost".
-
-### Patterns
-
-- **HTTP service**: axon.ListenAndServe + axon.MustLoadConfig
-- **CLI tool**: main.go with os.Args or flag parsing. No axon import needed.
-- **LLM conversation**: axon-loop + axon-talk + axon-tool (all three required). The loop orchestrates turns, talk connects to the LLM provider, tool defines the structured actions the model can take. Selecting axon-loop without axon-tool means the model has no tools to call and cannot produce structured output.
-- **Async/background work**: axon-task + axon-fact; never block HTTP handlers
-- **Authentication**: axon-auth (WebAuthn/passkeys)
-- **Event audit trail / replay**: axon-fact projectors
-- **Cross-session memory**: axon-memo
-- **Cross-instance fan-out**: axon-nats
-- **Process supervision**: aurelia service YAML
-- **Deterministic logic**: Go code, no LLM needed
-- **Non-deterministic logic**: axon-loop, never raw LLM calls
-
-### File Conventions
-
-- `main.go`: Entry point. HTTP services: imports axon, calls axon.ListenAndServe. CLI tools: parses args, wires deps, runs pipeline.
-- `justfile`: build, install, test targets using just
-- `AGENTS.md`: Architecture, module selections, boundaries, dep graph
-- `CLAUDE.md`: Working instructions for Claude Code
-- `README.md`: What it is, how to run it
-- `plans/YYYY-MM-DD-initial-build.md`: Commit-sized plan steps
-
-### Boundary Notes
-
-The boundary between a caller and axon-loop is always non-det.
-The boundary between axon-loop and axon-talk is det (provider selection is deterministic).
-The boundary between axon-tool and its tool implementations depends on what the tools do.
-
+| Type                   | File                     | Purpose                                      |
+|------------------------|--------------------------|----------------------------------------------|
+| `cost.Middleware`      | `cost/middleware.go`     | Wraps `talk.LLMClient`, intercepts Chat      |
+| `cost.Aggregator`      | `cost/aggregator.go`     | Accumulates `CostRecord`s, computes totals   |
+| `cost.RateTable`       | `cost/ratetable.go`      | Maps provider+model to per-million USD rates |
+| `cost.CostRecord`      | `cost/types.go`          | Single-call cost result                      |
+| `cost.CostSummary`     | `cost/aggregator.go`     | Aggregated totals with ByLabel / ByModel     |
 
 ## Practice
 
-Execute the plan one step at a time. Each step is a TDD cycle that ends with a clean commit.
+1. Read the plan in `plans/`. Pick the next incomplete step.
+2. Write a failing test first, then make it pass, then clean up.
+3. Run `just test` before committing. Fix all failures.
+4. Stage only files for this step. One commit per step.
+5. Use conventional commit messages: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `infra:`, `config:`.
 
-1. Read the plan. Pick up the next incomplete step.
-2. Write a failing test first, then make it pass, then clean up. Run the full test suite before committing.
-3. Wire new code into the entrypoint immediately. Every step should produce a program that builds, runs, and does something observable end-to-end. Do not defer integration to later steps.
-4. Review your change for reuse, quality, and efficiency before committing.
-5. Run `git status`. Only stage files related to this step.
-6. One commit per plan step. Use conventional commit messages (feat/fix/refactor/test/infra/config prefix).
-7. Move to the next step.
+## Plan
 
-Stop if:
-- A step reveals a design question the plan did not anticipate
-- Tests are failing for reasons unrelated to the current step
+See `plans/2026-04-03-initial-build.md`.
