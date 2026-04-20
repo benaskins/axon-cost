@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	fact "github.com/benaskins/axon-fact"
 	talk "github.com/benaskins/axon-talk"
@@ -70,12 +71,17 @@ func New(inner talk.LLMClient, rt *RateTable, opts ...Option) *Middleware {
 // response content, estimates token counts, computes cost, and records the
 // result to the optional Aggregator and EventStore.
 func (m *Middleware) Chat(ctx context.Context, req *talk.Request, fn func(talk.Response) error) error {
-	var sb strings.Builder
+	var (
+		mu sync.Mutex
+		sb strings.Builder
+	)
 	err := m.inner.Chat(ctx, req, func(r talk.Response) error {
+		mu.Lock()
 		sb.WriteString(r.Content)
 		if r.Thinking != "" {
 			sb.WriteString(r.Thinking)
 		}
+		mu.Unlock()
 		return fn(r)
 	})
 	if err != nil {
@@ -83,7 +89,10 @@ func (m *Middleware) Chat(ctx context.Context, req *talk.Request, fn func(talk.R
 	}
 
 	inputTokens := EstimateTokens(requestText(req), m.tokensPerChar)
-	outputTokens := EstimateTokens(sb.String(), m.tokensPerChar)
+	mu.Lock()
+	outputText := sb.String()
+	mu.Unlock()
+	outputTokens := EstimateTokens(outputText, m.tokensPerChar)
 
 	record, calcErr := Calculate(m.provider, req.Model, inputTokens, outputTokens, m.rateTable)
 	if calcErr != nil {
