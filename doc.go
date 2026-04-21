@@ -3,4 +3,7 @@
 // totals across calls.
 //
 // Subpackage: cost.
+//
+// Class: domain
+// UseWhen: Cost visibility for LLM calls. Wraps talk.LLMClient to track spend.
 package cost
